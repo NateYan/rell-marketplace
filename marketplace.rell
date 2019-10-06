@@ -1,0 +1,182 @@
+/*
+This file shows how the backend for a simple marketplace is composed using RELL. It does not include the logistic part.
+First we have USER, the store owner and customer are stored in USER class.
+A store owner creates a STORE and creates some OFFERs.
+Customer can place an ORDER, which will create some ORDER_ITEMs.
+*/
+
+//user class, one pubkey one user name
+
+classs user {
+key: pubkey;
+key: name;
+index name;
+}
+
+//store claass, one user one store
+class store {
+key owner: user;
+key name;
+index owner;
+index name;
+}
+
+//offer class which lists product saled in a store
+class offer {
+offered_by: store;
+name;
+mutable price: decimal;
+mutable desc: text;
+key offered_by, name;
+index offered_by, name;
+}
+
+//order item class
+class order_item {
+order: order;
+offer: offer;
+quantity: decimal;
+fulfillment_center: text;
+}
+
+//order class
+class order {
+key order_num: text；
+total_product decimal;//calculate from order_item,sum(quantity)
+ship_fee: decimal;
+total_value: decimal;//calculate from order_item, sum(quantity * offer.price)
+ship_to: text;
+mutable status:	order_staus = order_status.created;
+}
+
+enum order_status {
+created,
+pending,
+shipping,
+shipped	
+}
+
+query get_user_by_name (user_name: name) {
+	return user @ {.name == user_name}
+}
+
+query get_store_by_name (store_name: name) {
+	return store @ {.name == store_name}
+}
+
+query get_store_by_ower_name (owner_name: name) {
+	return store @ {.owner == user@{.name == owner_name}}
+}
+
+query get_offer_by_store_and_name (store_name: name, offer_name: name) {
+	return offer @ {.offered_by == store@{.name == store_name}, .name == offer_name}
+}
+
+query get_order_by_status (order_status: order_status) {
+	return order @* {.status == order_status}
+}
+
+
+function get_store_owned_by_user(user_pubkey: pubkey): store {
+	val user = user@{.pubkey == user_pubkey};
+	return store @ {.owner == user};
+}
+
+function get_store_by_name(store_name: name): store {
+	return store @ {.name == store_name};
+}
+
+//get offer price for a specified store and offer
+function get_offer_price(store_name: name, offer_name: name): decimal {
+	return offer @ {.offered_by == get_store_by_name(store_name), .name == offer_name}.price;
+}
+
+//get offer by store name and offer name
+function get_offer(store_name: name, offer_name: name): decimal {
+	return offer @ {.offered_by == get_store_by_name(store_name), .name == offer_name};
+}
+
+operation register_user (user_pubkey: pubkey, user_name: name) {
+	require( is_signer(user_pubkey) );
+	create user (
+	pubkey = user_pubkey,
+	name = user_name
+	);
+}
+
+operation create_store (user_pubkey: pubkey, store_name: name) {
+	require( is_signer(user_pubkey) );
+	create store (
+	owner = user@{.pubkey == user_pubkey},
+	name = name
+	);
+}
+
+operation create_offer (user_pubkey: pubkey, store_name: name, offer_name: name, offer_price: decimal, offer_desc: text) {
+	require( is_signer(user_pubkey) );
+	if get_store_owned_by_user(user_pubkey) == get_store_by_name(name) {//check if the user owns the store
+		create offer (
+		owner = user@{.pubkey == user_pubkey},
+		name = store_name,
+		price = offer_price,
+		desc = offer_desc
+		);
+	}
+}
+
+operation place_an_order (store_name: name, shoppingcart: map(text, decimal), fulfillment_center: text, ship_fee: decimal, ship_to: text) {
+//shoppingcart is map contains the offer name and quantity boughy in the store
+
+	val total_product decimal;
+	
+	val total_value: decimal;
+	
+	for (offer_name in shoppingcart.keys()) {
+		//calculate total_product 
+		total_product = total_product + shoppingcart.get(offer_name);
+		//calculate total_value
+		total_value = total_value +shoppingcart.get(offer_name) * get_offer_price(store_name, offer_name)
+	}
+	
+	val new_order = create order (
+		order_num = 'order_num' + '_' + generate_some_random_number(),//not sure how to get random number in RELL
+		total_product = total_product,
+		ship_fee = ship_fee,
+		total_value = total_value,
+		ship_to = ship_to
+		//status has default value as 'created'
+		);
+	
+	for (offer_name in shoppingcart.keys()) {
+		create order_item (
+		order = new_order,
+		offer = get_offer(store_name, offer_name),
+		quantity = shoppingcart.get(offer_name),
+		fulfillment_center = fulfillment_center
+		);
+	}
+}
+
+operation update_order_status (order_num: text, new_order_status: order_status) {
+
+	update order @ {order_num == order_num}(order_status = new_order_status);
+
+}
+
+operation update_offer_price (store_name: name, offer_name: name, new_offer_price: decimal) {
+
+	update offer @ {offered_by == get_store_by_name(store_name), name == offer_name}(price = new_offer_price);
+
+}
+
+operation update_offer_desc (store_name: name, offer_name: name, new_offer_desc: decimal) {
+
+	update offer @ {offered_by == get_store_by_name(store_name), name == offer_name}(desc = new_offer_desc);
+
+}
+
+operation delete_offer (store_name: name, offer_name: name) {
+
+	delete offer @ {offered_by == get_store_by_name(store_name), name == offer_name};
+
+}
